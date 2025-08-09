@@ -1,8 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from os import getenv
-from app.db import init_db
-from app.routers import spots, oshis, routes, contents
+from app.db import init_db, test_connection  # DB接続機能を有効化
+# from app.routers import spots, oshis, routes, contents  # 後で実装
 
 app = FastAPI(title="OshiSpoNavi API", version="0.2.0")
 
@@ -11,13 +11,32 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 
 @app.on_event("startup")
 def _startup():
-    init_db()
+    init_db()  # DB初期化を有効化（エラーでもアプリは起動継続）
 
-@app.get("/health") #稼働確認用エンドポイント
+@app.get("/health")
 def health():
+    """アプリケーション稼働確認用エンドポイント"""
     return {"status": "ok", "version": getenv("GIT_SHA", "dev")}
 
-app.include_router(spots.router, prefix="/api/v1")
-app.include_router(oshis.router, prefix="/api/v1")
-app.include_router(routes.router, prefix="/api/v1")
-app.include_router(contents.router, prefix="/api/v1")
+@app.get("/health/db")
+def health_db():
+    """データベース接続確認用エンドポイント"""
+    if test_connection():
+        return {"status": "ok", "database": "connected", "message": "Azure MySQLに正常に接続しました"}
+    else:
+        return {
+            "status": "error", 
+            "database": "disconnected",
+            "message": "MySQLサーバーに接続できません。サーバーが起動しているか確認してください。",
+            "troubleshooting": [
+                "1. MySQLサーバーが起動しているか確認",
+                "2. 環境変数(.env)が正しく設定されているか確認", 
+                "3. ネットワーク接続を確認",
+                "4. Azure MySQLのファイアウォール設定を確認"
+            ]
+        }
+
+# app.include_router(spots.router, prefix="/api/v1")  # 後で実装
+# app.include_router(oshis.router, prefix="/api/v1")  # 後で実装
+# app.include_router(routes.router, prefix="/api/v1")  # 後で実装
+# app.include_router(contents.router, prefix="/api/v1")  # 後で実装
