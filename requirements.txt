@@ -3,3 +3,4 @@ uvicorn[standard]
 sqlmodel
 pymysql
 python-dotenv
+cryptography
