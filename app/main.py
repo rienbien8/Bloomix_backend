@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from os import getenv
 from app.db import init_db, test_connection  # DB接続機能を有効化
-# from app.routers import spots, oshis, routes, contents  # 後で実装
+# from app.routers import spots #, oshis, routes, contents  # 後で実装
+import app.routers.spots as spots_router
 
 app = FastAPI(title="OshiSpoNavi API", version="0.2.0")
 
@@ -35,6 +36,9 @@ def health_db():
                 "4. Azure MySQLのファイアウォール設定を確認"
             ]
         }
+
+# 追加↓↓
+app.include_router(spots_router.router)
 
 # app.include_router(spots.router, prefix="/api/v1")  # 後で実装
 # app.include_router(oshis.router, prefix="/api/v1")  # 後で実装
