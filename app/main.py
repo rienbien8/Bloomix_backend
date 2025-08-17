@@ -7,6 +7,8 @@ import app.routers.spots as spots_router
 import app.routers.oshis as oshis_router
 import app.routers.user_oshis as user_oshis_router
 import app.routers.contents as contents_router
+import app.routers.bff_maps as bff_maps_router
+
 
 
 app = FastAPI(title="OshiSpoNavi API", version="0.2.0")
@@ -46,6 +48,8 @@ app.include_router(spots_router.router)
 app.include_router(oshis_router.router)
 app.include_router(user_oshis_router.router)
 app.include_router(contents_router.router)
+app.include_router(bff_maps_router.router)
+
 
 # app.include_router(spots.router, prefix="/api/v1")  # 後で実装
 # app.include_router(oshis.router, prefix="/api/v1")  # 後で実装
