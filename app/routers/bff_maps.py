@@ -140,3 +140,100 @@ def search_text(
             "types": p.get("types", []),
         })
     return {"count": len(items), "items": items}
+
+# /bff/maps/route追記
+@router.get("/route")
+def compute_route(
+    origin: str = Query(..., description="lat,lng 出発地"),
+    destination: str = Query(..., description="lat,lng 目的地"),
+    language: str = Query("ja", description="言語コード"),
+    waypoints: str | None = Query(None, description="経由地 lat,lng|lat,lng..."),
+    alternatives: int = Query(1, description="代替ルートを返すか"),
+):
+    """
+    Google Routes API v2: computeRoutes
+    - 最短ルートとエコルートを返す
+    """
+    if not API_KEY:
+        raise HTTPException(500, "GOOGLE_MAPS_API_KEY not configured")
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": API_KEY,
+        "X-Goog-FieldMask": (
+            "routes.duration,"
+            "routes.distanceMeters,"
+            "routes.polyline.encodedPolyline,"
+            "routes.travelAdvisory.fuelConsumptionMicroliters,"
+            "routes.routeLabels"  # ← 追加
+        ),
+    }
+
+    def parse_latlng(s: str):
+        lat, lng = [float(x) for x in s.split(",")]
+        return {"location": {"latLng": {"latitude": lat, "longitude": lng}}}
+
+    body = {
+        "origin": parse_latlng(origin),
+        "destination": parse_latlng(destination),
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_AWARE_OPTIMAL",
+        "polylineQuality": "OVERVIEW",
+        "computeAlternativeRoutes": True,  # ←代替ルートを必ず返す
+        "languageCode": language,
+        "extraComputations": ["FUEL_CONSUMPTION"],
+    }
+    if waypoints:
+        body["intermediates"] = [
+            parse_latlng(w) for w in waypoints.split("|") if w
+        ]
+
+    r = requests.post(
+        "https://routes.googleapis.com/directions/v2:computeRoutes",
+        headers=headers,
+        json=body,
+        timeout=10,
+    )
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    data = r.json()
+
+    # 整形
+    
+    
+    routes = []
+    for idx, rt in enumerate(data.get("routes", [])):
+        dur_sec = float(str(rt.get("duration", "0s")).replace("s", "")) if rt.get("duration") else 0
+        dist_m = rt.get("distanceMeters", 0)
+        poly = (rt.get("polyline") or {}).get("encodedPolyline")
+        fuel = (rt.get("travelAdvisory") or {}).get("fuelConsumptionMicroliters")
+        labels = rt.get("routeLabels", []) or []
+
+        # 一応ラベルでエコ判定できる時は拾う
+        rtype = "eco" if "FUEL_EFFICIENT" in labels else ("fastest" if idx == 0 else "eco")
+        
+        routes.append({
+            "type": rtype,
+            "duration_min": round(dur_sec / 60, 1),
+            "distance_km": round(dist_m / 1000, 1),
+            "polyline": poly,
+            "advisory": {
+                "fuel_consumption_ml": int(fuel/1000) if fuel else None
+            },
+            "labels": labels
+        })
+        
+    
+
+    # --- 3) フォールバック（二択を保証）---
+    if len(routes) == 1:
+        # 同じものを eco として複製（メモを残す）
+        clone = {**routes[0], "type": "eco"}
+        if "labels" in clone:
+            clone["labels"] = list(set([*clone.get("labels", []), "FALLBACK_DUP"]))
+        routes.append(clone)
+
+    # "fastest" を先、"eco" を後に並べ替え（念のため）
+    routes = sorted(routes, key=lambda r: 0 if r["type"] == "fastest" else 1)
+
+    return {"routes": routes}
