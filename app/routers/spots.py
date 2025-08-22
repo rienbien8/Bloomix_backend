@@ -129,7 +129,7 @@ def _parse_origin(origin: Optional[str], bbox_tuple: Tuple[float, float, float, 
 @router.get("")
 def list_spots(
     bbox: str = Query(..., description="minLat,minLng,maxLat,maxLng"),
-    is_special: Optional[int] = Query(None, description="0 or 1"),
+    is_special: Optional[int] = Query(None, descripticon="0 or 1"),
     q: Optional[str] = Query(None, description="partial match on name/description"),
     origin: Optional[str] = Query(None, description="lat,lng (distance sort origin)"),
     limit: int = Query(50, ge=1, le=200),
