@@ -6,12 +6,18 @@ from app.db import init_db, test_connection  # DB接続機能を有効化
 import app.routers.spots as spots_router
 import app.routers.oshis as oshis_router
 import app.routers.user_oshis as user_oshis_router
+import app.routers.user_contents as user_contents_router
 import app.routers.contents as contents_router
 import app.routers.bff_maps as bff_maps_router
 
 
 
 app = FastAPI(title="OshiSpoNavi API", version="0.2.0")
+
+ALLOWED_ORIGINS = [
+    "https://app-002-gen10-step3-2-node-oshima7.azurewebsites.net",  # フロント本番
+    "http://localhost:3000",  # 開発用
+]
 
 origins = [o.strip() for o in getenv("ALLOWED_ORIGINS", "*").split(",")]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -47,6 +53,7 @@ def health_db():
 app.include_router(spots_router.router)
 app.include_router(oshis_router.router)
 app.include_router(user_oshis_router.router)
+app.include_router(user_contents_router.router)
 app.include_router(contents_router.router)
 app.include_router(bff_maps_router.router)
 
