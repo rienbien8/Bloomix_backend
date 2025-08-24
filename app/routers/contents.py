@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import asc
 
 from app.db import get_session
-from app.models import Content, SpotContent, SpotsOshi  # type: ignore
+from app.models import Content, SpotContent, SpotsOshi, Oshi  # type: ignore
 
 router = APIRouter(prefix="/api/v1/contents", tags=["contents"])
 
@@ -42,7 +42,8 @@ def list_contents(
 
     # ベース: Content
     # 条件によって SpotContent / SpotsOshi を段階的にJOIN
-    stmt = select(Content).distinct()
+    stmt = select(Content, Oshi.name.label('oshi_name')).distinct()
+    stmt = stmt.outerjoin(Oshi, Content.oshi_id == Oshi.id)
 
     sc_joined = False
     so_joined = False
@@ -78,7 +79,7 @@ def list_contents(
     Content.id.asc()                         # 最後に安定化
 ).limit(limit)
     
-    rows = db.execute(stmt).scalars().all()
+    rows = db.execute(stmt).all()
 
     items = [{
         "id": c.id,
@@ -89,6 +90,7 @@ def list_contents(
         "lang": getattr(c, "lang", None),
         "thumbnail_url": getattr(c, "thumbnail_url", None),
         "duration_min": getattr(c, "duration_min", None),
-    } for c in rows]
+        "oshi_name": oshi_name,  # 推しの名前を正しく取得
+    } for c, oshi_name in rows]
 
     return {"count": len(items), "items": items}
