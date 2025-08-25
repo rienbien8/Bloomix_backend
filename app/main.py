@@ -9,6 +9,7 @@ import app.routers.user_oshis as user_oshis_router
 import app.routers.user_contents as user_contents_router
 import app.routers.contents as contents_router
 import app.routers.bff_maps as bff_maps_router
+import app.routers.planner as planner_router
 
 
 
@@ -56,6 +57,7 @@ app.include_router(user_oshis_router.router)
 app.include_router(user_contents_router.router)
 app.include_router(contents_router.router)
 app.include_router(bff_maps_router.router)
+app.include_router(planner_router.router)
 
 
 # app.include_router(spots.router, prefix="/api/v1")  # 後で実装

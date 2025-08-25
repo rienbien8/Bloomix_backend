@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session  # 既存のdb.pyのセッションジェネレータ
 # ↓ ここは app/models.py の実クラス名に合わせて変更してください
-from app.models import Spot, Content, SpotContent  # type: ignore
+from app.models import Spot, Content, SpotContent, Oshi, SpotsOshi  # type: ignore
 
 from app.utils.geo import haversine_km, bbox_center
 import math
@@ -156,6 +156,16 @@ def list_spots(
     for s in candidates:
         # Decimal列でもfloat()でOK
         d = haversine_km(float(s.lat), float(s.lng), org_lat, org_lng)
+        
+        # スポットに関連する推しを取得
+        oshi_stmt = (
+            select(Oshi)
+            .join(SpotsOshi, SpotsOshi.oshi_id == Oshi.id)
+            .where(SpotsOshi.spot_id == s.id)
+            .order_by(Oshi.name.asc())
+        )
+        oshis = db.execute(oshi_stmt).scalars().all()
+        
         items.append({
             "id": s.id,
             "name": s.name,
@@ -167,6 +177,13 @@ def list_spots(
             "address": getattr(s, "address", None),
             "place_id": getattr(s, "place_id", None),
             "distance_km": round(d, 3),
+            "oshis": [{
+                "id": o.id,
+                "name": o.name,
+                "category": o.category,
+                "description": getattr(o, "description", None),
+                "image_url": getattr(o, "image_url", None),
+            } for o in oshis],
         })
     items.sort(key=lambda x: x["distance_km"])
     return {"count": min(len(items), limit), "items": items[:limit]}
@@ -250,6 +267,39 @@ def get_spot(spot_id: int, db: Session = Depends(get_session)):
         "description": getattr(s, "description", None),
         "created_at": getattr(s, "created_at", None),
         "updated_at": getattr(s, "updated_at", None),
+    }
+
+@router.get("/{spot_id}/oshis")
+def get_spot_oshis(
+    spot_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_session),
+):
+    """スポットに関連する推しを取得"""
+    # スポット存在チェック
+    spot = db.execute(select(Spot).where(Spot.id == spot_id)).scalar_one_or_none()
+    if not spot:
+        raise HTTPException(status_code=404, detail="spot not found")
+
+    # Spot に紐づく Oshi を取得
+    stmt = (
+        select(Oshi)
+        .join(SpotsOshi, SpotsOshi.oshi_id == Oshi.id)
+        .where(SpotsOshi.spot_id == spot_id)
+        .order_by(Oshi.name.asc())
+        .limit(limit)
+    )
+
+    rows = db.execute(stmt).scalars().all()
+    return {
+        "count": len(rows),
+        "items": [{
+            "id": o.id,
+            "name": o.name,
+            "category": o.category,
+            "description": getattr(o, "description", None),
+            "image_url": getattr(o, "image_url", None),
+        } for o in rows]
     }
 
 @router.get("/{spot_id}/contents")

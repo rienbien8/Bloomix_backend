@@ -40,6 +40,7 @@ class Oshi(Base):
 
     users = relationship("User", secondary="user_oshi", back_populates="oshis", lazy="selectin")
     spots = relationship("Spot", secondary="spot_oshi", back_populates="oshis", lazy="selectin")
+    contents = relationship("Content", back_populates="oshi", lazy="selectin")
 
     __table_args__ = (
         Index("ix_oshis_name", "name"),
@@ -88,14 +89,17 @@ class Content(Base):
     lang = Column(String(8), nullable=True)              # 'ja','en' など
     thumbnail_url = Column(String(512), nullable=True)
     duration_min = Column(SmallInteger, nullable=True)
+    oshi_id = Column(BigInteger, ForeignKey("oshis.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
     spots = relationship("Spot", secondary="spot_content", back_populates="contents", lazy="selectin")
+    oshi = relationship("Oshi", back_populates="contents", lazy="selectin")
 
     __table_args__ = (
         Index("ix_contents_lang_duration", "lang", "duration_min"),
         Index("ix_contents_title", "title"),
+        Index("ix_contents_oshi", "oshi_id"),
     )
 
 # ----------------------------
