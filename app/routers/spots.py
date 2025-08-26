@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session  # 既存のdb.pyのセッションジェネレータ
 # ↓ ここは app/models.py の実クラス名に合わせて変更してください
-from app.models import Spot, Content, SpotContent, Oshi, SpotsOshi  # type: ignore
+from app.models import Spot, Content, SpotContent, Oshi, SpotsOshi, UserOshi  # type: ignore
 
 from app.utils.geo import haversine_km, bbox_center
 import math
@@ -132,6 +132,8 @@ def list_spots(
     is_special: Optional[int] = Query(None, descripticon="0 or 1"),
     q: Optional[str] = Query(None, description="partial match on name/description"),
     origin: Optional[str] = Query(None, description="lat,lng (distance sort origin)"),
+    user_id: Optional[int] = Query(None, description="ユーザーID（フォロー推しフィルタリング用）"),
+    followed_only: Optional[int] = Query(0, description="フォロー推しのみ表示（0 or 1）"),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_session),
 ):
@@ -139,10 +141,43 @@ def list_spots(
     min_lat, min_lng, max_lat, max_lng = _parse_bbox(bbox)
     org_lat, org_lng = _parse_origin(origin, (min_lat, min_lng, max_lat, max_lng))
 
+    # フォロー推しフィルタリング
+    user_oshi_ids = []
+    if followed_only and user_id:
+        try:
+            user_oshi_ids = db.execute(
+                select(UserOshi.oshi_id).where(UserOshi.user_id == user_id)
+            ).scalars().all()
+            print(f"DEBUG: ユーザー{user_id}のフォロー推しID: {user_oshi_ids}")
+        except Exception as e:
+            print(f"DEBUG: フォロー推し取得エラー: {e}")
+            user_oshi_ids = []
+
     # 絞り込み（まずはBBox）
-    stmt = select(Spot).where(
-        and_(Spot.lat >= min_lat, Spot.lat <= max_lat, Spot.lng >= min_lng, Spot.lng <= max_lng)
-    )
+    if followed_only and user_oshi_ids:
+        # フォロー推しに関連するスポットのみ取得
+        stmt = (
+            select(Spot)
+            .join(SpotsOshi, SpotsOshi.spot_id == Spot.id)
+            .where(
+                and_(
+                    SpotsOshi.oshi_id.in_(user_oshi_ids),
+                    Spot.lat >= min_lat,
+                    Spot.lat <= max_lat,
+                    Spot.lng >= min_lng,
+                    Spot.lng <= max_lng
+                )
+            )
+            .distinct()
+        )
+        print(f"DEBUG: フォロー推しフィルタリング適用")
+    else:
+        # 全スポット取得
+        stmt = select(Spot).where(
+            and_(Spot.lat >= min_lat, Spot.lat <= max_lat, Spot.lng >= min_lng, Spot.lng <= max_lng)
+        )
+        print(f"DEBUG: 全スポット取得")
+
     if is_special is not None:
         stmt = stmt.where(Spot.is_special == bool(is_special))
     if q:
@@ -152,19 +187,41 @@ def list_spots(
 
     # 取り過ぎ→距離計算→昇順→limit
     candidates = db.execute(stmt).scalars().all()
+    print(f"DEBUG: 取得したスポット数: {len(candidates)}")
+    
+    # 最適化: スポットIDを一括で取得して推し情報を一括取得
+    spot_ids = [s.id for s in candidates]
+    
+    # 一括で推し情報を取得（N+1問題を解決）
+    oshi_data = {}
+    if spot_ids:
+        oshi_stmt = (
+            select(SpotsOshi.spot_id, Oshi)
+            .join(Oshi, SpotsOshi.oshi_id == Oshi.id)
+            .where(SpotsOshi.spot_id.in_(spot_ids))
+            .order_by(SpotsOshi.spot_id, Oshi.name.asc())
+        )
+        oshi_results = db.execute(oshi_stmt).all()
+        
+        # スポットIDごとに推し情報をグループ化
+        for spot_id, oshi in oshi_results:
+            if spot_id not in oshi_data:
+                oshi_data[spot_id] = []
+            oshi_data[spot_id].append({
+                "id": oshi.id,
+                "name": oshi.name,
+                "category": oshi.category,
+                "description": getattr(oshi, "description", None),
+                "image_url": getattr(oshi, "image_url", None),
+            })
+    
     items = []
     for s in candidates:
         # Decimal列でもfloat()でOK
         d = haversine_km(float(s.lat), float(s.lng), org_lat, org_lng)
         
-        # スポットに関連する推しを取得
-        oshi_stmt = (
-            select(Oshi)
-            .join(SpotsOshi, SpotsOshi.oshi_id == Oshi.id)
-            .where(SpotsOshi.spot_id == s.id)
-            .order_by(Oshi.name.asc())
-        )
-        oshis = db.execute(oshi_stmt).scalars().all()
+        # 最適化: 事前に取得した推し情報を使用
+        oshis = oshi_data.get(s.id, [])
         
         items.append({
             "id": s.id,
@@ -177,14 +234,9 @@ def list_spots(
             "address": getattr(s, "address", None),
             "place_id": getattr(s, "place_id", None),
             "distance_km": round(d, 3),
-            "oshis": [{
-                "id": o.id,
-                "name": o.name,
-                "category": o.category,
-                "description": getattr(o, "description", None),
-                "image_url": getattr(o, "image_url", None),
-            } for o in oshis],
+            "oshis": oshis,
         })
+
     items.sort(key=lambda x: x["distance_km"])
     return {"count": min(len(items), limit), "items": items[:limit]}
 
