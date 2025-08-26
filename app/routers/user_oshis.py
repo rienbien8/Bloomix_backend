@@ -39,6 +39,10 @@ def follow_oshi(
         
     except Exception as e:
         db.rollback()
+        print(f"フォローエラーの詳細: {e}")
+        print(f"エラータイプ: {type(e)}")
+        import traceback
+        print(f"スタックトレース: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to follow oshi: {str(e)}")
 
 @router.delete("/{user_id}/oshis/{oshi_id}")
@@ -68,6 +72,10 @@ def unfollow_oshi(
         
     except Exception as e:
         db.rollback()
+        print(f"フォロー解除エラーの詳細: {e}")
+        print(f"エラータイプ: {type(e)}")
+        import traceback
+        print(f"スタックトレース: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to unfollow oshi: {str(e)}")
 
 @router.get("/{user_id}/oshis")

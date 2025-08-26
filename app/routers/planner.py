@@ -1,12 +1,12 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, text
+from sqlalchemy import and_, or_, func
 from typing import List, Optional
 from pydantic import BaseModel
 import math
 
 from app.db import get_session
-from app.models import Content, User, UserOshi, SpotContent, SpotsOshi
+from app.models import Content, User, UserOshi, SpotContent, SpotsOshi, Oshi
 
 router = APIRouter(prefix="/api/v1/planner", tags=["planner"])
 
@@ -85,6 +85,38 @@ def get_user_oshi_weights(db: Session, user_id: int) -> dict:
         print(f"推し重み取得エラー: {e}")
         return {}
 
+def get_related_oshis_for_content(content, oshi_ids, db):
+    """コンテンツに関連する推し名を取得"""
+    related_oshis = []
+    try:
+        # 方法1: 直接contentテーブルからoshi_idを取得（ORM使用）
+        if hasattr(content, 'oshi_id') and content.oshi_id:
+            oshi = db.query(Oshi).filter(Oshi.id == content.oshi_id).first()
+            if oshi and oshi.name not in related_oshis:
+                related_oshis.append(oshi.name)
+        
+        # 方法2: 従来の方法（spot経由で推しを取得）
+        if not related_oshis:
+            related_spots = db.query(SpotContent).filter(
+                SpotContent.content_id == content.id
+            ).all()
+            
+            for spot_content in related_spots:
+                spot_oshis = db.query(SpotsOshi).filter(
+                    SpotsOshi.spot_id == spot_content.spot_id
+                ).all()
+                
+                for spot_oshi in spot_oshis:
+                    if spot_oshi.oshi_id in oshi_ids:
+                        oshi = db.query(Oshi).filter(Oshi.id == spot_oshi.oshi_id).first()
+                        if oshi and oshi.name not in related_oshis:
+                            related_oshis.append(oshi.name)
+        
+        return related_oshis
+    except Exception as e:
+        print(f"推し名取得エラー: {e}")
+        return []
+
 # =============================
 # Greedy Algorithm for Playlist Generation
 # =============================
@@ -98,19 +130,30 @@ def generate_playlist_greedy(
     tolerance_min: int
 ) -> tuple[List[PlaylistItem], PlaylistSummary]:
     """
-    貪欲法でプレイリストを生成
+    フォロー中の推しのみで、所要時間の5-15%のコンテンツを優先的にランダムで選択
     
     アルゴリズム:
-    1. 利用可能なコンテンツを時間順でソート
-    2. 目標時間に最も近づくように、短いコンテンツから順次追加
-    3. ユーザーの推し関連性でスコア調整
-    4. 効率性を考慮して最適な組み合わせを選択
+    1. フォロー中の推しに関連するコンテンツのみを取得
+    2. 所要時間の5-15%のコンテンツを優先的に選択
+    3. ランダムで組み合わせてプレイリストを構築
+    4. 必要に応じて他のコンテンツも追加
     """
     
     try:
-        # 1. 利用可能なコンテンツを取得
-        query = db.query(Content).filter(
+        # 1. フォロー中の推しを取得
+        user_oshis = db.query(UserOshi).filter(UserOshi.user_id == user_id).all()
+        if not user_oshis:
+            raise HTTPException(status_code=404, detail="フォローしている推しが見つかりません")
+        
+        oshi_ids = [uo.oshi_id for uo in user_oshis]
+        
+        # 2. フォロー中の推しに関連するコンテンツを取得
+        followed_contents = []
+        
+        # 方法1: 直接Contentテーブルのoshi_idから取得
+        direct_contents = db.query(Content).filter(
             and_(
+                Content.oshi_id.in_(oshi_ids),
                 Content.duration_min.isnot(None),
                 Content.duration_min > 0,
                 Content.media_type.in_(content_types),
@@ -119,102 +162,77 @@ def generate_playlist_greedy(
                     Content.lang.is_(None)
                 )
             )
-        ).order_by(Content.duration_min.asc())
+        ).all()
+        followed_contents.extend(direct_contents)
         
-        available_contents = query.all()
+        # 方法2: スポット経由で取得（SpotContentsテーブルが空の場合のフォールバック）
+        for oshi_id in oshi_ids:
+            # 推しに関連するスポットを取得
+            spot_oshis = db.query(SpotsOshi).filter(SpotsOshi.oshi_id == oshi_id).all()
+            spot_ids = [so.spot_id for so in spot_oshis]
+            
+            # スポットに関連するコンテンツを取得
+            if spot_ids:
+                spot_contents = db.query(SpotContent).filter(
+                    SpotContent.spot_id.in_(spot_ids)
+                ).all()
+                content_ids = [sc.content_id for sc in spot_contents]
+                
+                # コンテンツ詳細を取得
+                if content_ids:
+                    contents = db.query(Content).filter(
+                        and_(
+                            Content.id.in_(content_ids),
+                            Content.duration_min.isnot(None),
+                            Content.duration_min > 0,
+                            Content.media_type.in_(content_types),
+                            or_(
+                                Content.lang.in_(preferred_langs),
+                                Content.lang.is_(None)
+                            )
+                        )
+                    ).all()
+                    followed_contents.extend(contents)
         
-        if not available_contents:
-            raise HTTPException(status_code=404, detail="利用可能なコンテンツが見つかりません")
+        if not followed_contents:
+            raise HTTPException(status_code=404, detail="フォロー中の推しに関連するコンテンツが見つかりません")
         
-        # 2. ユーザーの推し関連重みを取得
-        oshi_weights = get_user_oshi_weights(db, user_id)
+        # 3. 重複を除去
+        unique_contents = list({content.id: content for content in followed_contents}.values())
         
-        # 3. 貪欲法でプレイリストを構築
+        # 4. 所要時間の5-15%のコンテンツを優先的に選択
+        target_range_min = target_duration_min * 0.05  # 5%
+        target_range_max = target_duration_min * 0.15  # 15%
+        
+        # 優先コンテンツ（5-15%の範囲）
+        priority_contents = [
+            content for content in unique_contents
+            if target_range_min <= content.duration_min <= target_range_max
+        ]
+        
+        # その他のコンテンツ
+        other_contents = [
+            content for content in unique_contents
+            if content.duration_min < target_range_min or content.duration_min > target_range_max
+        ]
+        
+        # 5. ランダムでプレイリストを構築
+        import random
+        random.seed()  # ランダムシードをリセット
+        
         playlist = []
         current_duration = 0
         remaining_duration = target_duration_min
         
-        # 短いコンテンツから順次追加
-        for content in available_contents:
+        # 優先コンテンツをランダムで追加
+        random.shuffle(priority_contents)
+        for content in priority_contents:
             if len(playlist) >= max_items:
                 break
                 
-            # 残り時間を超える場合はスキップ
-            if content.duration_min > remaining_duration + tolerance_min:
-                continue
-            
-            # 推し関連性でスコア調整
-            oshi_score = 1.0
-            if oshi_weights:
-                # このコンテンツが推しに関連しているかチェック
-                related_spots = db.query(SpotContent).filter(
-                    SpotContent.content_id == content.id
-                ).all()
-                
-                for spot_content in related_spots:
-                    spot_oshis = db.query(SpotsOshi).filter(
-                        SpotsOshi.spot_id == spot_content.spot_id
-                    ).all()
-                    
-                    for spot_oshi in spot_oshis:
-                        if spot_oshi.oshi_id in oshi_weights:
-                            oshi_score += 0.5  # 推し関連でボーナス
-            
-            # 効率性を考慮したスコア計算
-            potential_duration = current_duration + content.duration_min
-            efficiency = calculate_efficiency_score(potential_duration, target_duration_min, tolerance_min)
-            
-            # 総合スコア（時間効率 + 推し関連性）
-            total_score = efficiency * 0.7 + oshi_score * 0.3
-            
-            # スコアが閾値を超える場合のみ追加
-            if total_score > 0.6:  # 最低スコア閾値
+            if content.duration_min <= remaining_duration + tolerance_min:
                 # 関連する推し名を取得
-                related_oshis = []
-                try:
-                    # 方法1: 直接contentテーブルからoshi_idを取得（実際のDB構造に合わせて）
-                    # 注意: 現在のモデルにはoshi_idフィールドがないため、生SQLで確認
-                    raw_result = db.execute(
-                        text("SELECT oshi_id FROM contents WHERE id = :content_id AND oshi_id IS NOT NULL"),
-                        {"content_id": content.id}
-                    ).fetchone()
-                    
-                    if raw_result and raw_result[0]:
-                        oshi = db.query(Oshi).filter(Oshi.id == raw_result[0]).first()
-                        if oshi and oshi.name not in related_oshis:
-                            related_oshis.append(oshi.name)
-                    
-                    # 方法2: 従来の方法（spot経由で推しを取得）
-                    if not related_oshis:
-                        related_spots = db.query(SpotContent).filter(
-                            SpotContent.content_id == content.id
-                        ).all()
-                        
-                        for spot_content in related_spots:
-                            spot_oshis = db.query(SpotsOshi).filter(
-                                SpotsOshi.spot_id == spot_content.spot_id
-                            ).all()
-                            
-                            for spot_oshi in spot_oshis:
-                                oshi = db.query(Oshi).filter(Oshi.id == spot_oshi.oshi_id).first()
-                                if oshi and oshi.name not in related_oshis:
-                                    related_oshis.append(oshi.name)
-                    
-                    print(f"DEBUG: Content {content.id} の推し情報: {related_oshis}")
-                    
-                except Exception as e:
-                    print(f"推し名取得エラー: {e}")
-                    # エラーが発生した場合のフォールバック
-                    try:
-                        # 生SQLで直接確認
-                        result = db.execute(
-                            text("SELECT oshi_id FROM contents WHERE id = :content_id"),
-                            {"content_id": content.id}
-                        ).fetchone()
-                        if result:
-                            print(f"DEBUG: 生SQL結果: {result}")
-                    except Exception as fallback_error:
-                        print(f"フォールバックエラー: {fallback_error}")
+                related_oshis = get_related_oshis_for_content(content, oshi_ids, db)
                 
                 playlist.append({
                     "content_id": content.id,
@@ -223,18 +241,41 @@ def generate_playlist_greedy(
                     "lang": content.lang,
                     "media_type": content.media_type,
                     "thumbnail_url": content.thumbnail_url,
-                    "total_duration_min": potential_duration,
-                    "remaining_min": max(0, target_duration_min - potential_duration),
+                    "total_duration_min": current_duration + content.duration_min,
+                    "remaining_min": max(0, target_duration_min - (current_duration + content.duration_min)),
                     "related_oshis": related_oshis
                 })
                 
-                current_duration = potential_duration
+                current_duration += content.duration_min
                 remaining_duration = target_duration_min - current_duration
         
-        # 4. 結果を時間順でソート
-        playlist.sort(key=lambda x: x["total_duration_min"])
+        # 6. 必要に応じて他のコンテンツも追加
+        if remaining_duration > tolerance_min and len(playlist) < max_items:
+            random.shuffle(other_contents)
+            for content in other_contents:
+                if len(playlist) >= max_items:
+                    break
+                    
+                if content.duration_min <= remaining_duration + tolerance_min:
+                    # 関連する推し名を取得
+                    related_oshis = get_related_oshis_for_content(content, oshi_ids, db)
+                    
+                    playlist.append({
+                        "content_id": content.id,
+                        "title": content.title,
+                        "duration_min": content.duration_min,
+                        "lang": content.lang,
+                        "media_type": content.media_type,
+                        "thumbnail_url": content.thumbnail_url,
+                        "total_duration_min": current_duration + content.duration_min,
+                        "remaining_min": max(0, target_duration_min - (current_duration + content.duration_min)),
+                        "related_oshis": related_oshis
+                    })
+                    
+                    current_duration += content.duration_min
+                    remaining_duration = target_duration_min - current_duration
         
-        # 5. サマリー情報を計算
+        # 7. サマリー情報を計算
         total_duration = current_duration
         overage = max(0, total_duration - target_duration_min)
         efficiency_score = calculate_efficiency_score(total_duration, target_duration_min, tolerance_min)
@@ -250,7 +291,7 @@ def generate_playlist_greedy(
         
     except Exception as e:
         print(f"プレイリスト生成エラー: {e}")
-        raise HTTPException(status_code=500, detail=f"プレイリスト生成に失敗しました: {str(e)}")
+        raise HTTPException(status_code=500, detail="プレイリスト生成中にエラーが発生しました")
 
 # =============================
 # API Endpoints
