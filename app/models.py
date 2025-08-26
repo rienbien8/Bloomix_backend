@@ -18,7 +18,7 @@ class User(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
-    oshis = relationship("Oshi", secondary="user_oshi", back_populates="users", lazy="selectin")
+    oshis = relationship("Oshi", secondary="user_oshi", back_populates="users", lazy="noload")
 
     __table_args__ = (
         Index("ix_users_username", "username"),
@@ -38,9 +38,9 @@ class Oshi(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
-    users = relationship("User", secondary="user_oshi", back_populates="oshis", lazy="selectin")
-    spots = relationship("Spot", secondary="spot_oshi", back_populates="oshis", lazy="selectin")
-    contents = relationship("Content", back_populates="oshi", lazy="selectin")
+    users = relationship("User", secondary="user_oshi", back_populates="oshis", lazy="noload")
+    spots = relationship("Spot", secondary="spot_oshi", back_populates="oshis", lazy="noload")
+    contents = relationship("Content", back_populates="oshi", lazy="noload")
 
     __table_args__ = (
         Index("ix_oshis_name", "name"),
@@ -66,8 +66,8 @@ class Spot(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
-    contents = relationship("Content", secondary="spot_content", back_populates="spots", lazy="selectin")
-    oshis = relationship("Oshi", secondary="spot_oshi", back_populates="spots", lazy="selectin")
+    contents = relationship("Content", secondary="spot_content", back_populates="spots", lazy="noload")
+    oshis = relationship("Oshi", secondary="spot_oshi", back_populates="spots", lazy="noload")
 
     __table_args__ = (
         Index("ix_spots_lat_lng", "lat", "lng"),
@@ -93,8 +93,8 @@ class Content(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
-    spots = relationship("Spot", secondary="spot_content", back_populates="contents", lazy="selectin")
-    oshi = relationship("Oshi", back_populates="contents", lazy="selectin")
+    spots = relationship("Spot", secondary="spot_content", back_populates="contents", lazy="noload")
+    oshi = relationship("Oshi", back_populates="contents", lazy="noload")
 
     __table_args__ = (
         Index("ix_contents_lang_duration", "lang", "duration_min"),

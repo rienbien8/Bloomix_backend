@@ -5,7 +5,7 @@ from sqlalchemy import select, distinct
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import User, Content, UserOshi, SpotsOshi, SpotContent
+from app.models import User, Content, UserOshi, SpotsOshi, SpotContent, Oshi
 
 router = APIRouter(prefix="/api/v1/users", tags=["user-contents"])
 
@@ -82,6 +82,14 @@ def list_user_contents(
         print(f"DEBUG: 方法1で取得したコンテンツ数: {len(contents)}")
         
         if contents:
+            # Oshi名を取得
+            oshi_names = {}
+            for c in contents:
+                if c.oshi_id:
+                    oshi = db.execute(select(Oshi).where(Oshi.id == c.oshi_id)).scalar_one_or_none()
+                    if oshi:
+                        oshi_names[c.id] = oshi.name
+            
             items = [{
                 "id": c.id,
                 "title": c.title,
@@ -91,6 +99,7 @@ def list_user_contents(
                 "lang": getattr(c, "lang", None),
                 "thumbnail_url": getattr(c, "thumbnail_url", None),
                 "duration_min": getattr(c, "duration_min", None),
+                "oshi_name": oshi_names.get(c.id),
             } for c in contents]
             
             print(f"DEBUG: 方法1成功 - 返却件数: {len(items)}")
@@ -145,6 +154,14 @@ def list_user_contents(
         
         print(f"DEBUG: 方法2で取得したコンテンツ数: {len(contents)}")
 
+        # Oshi名を取得（JOIN方式の場合は、Content.oshi_idから取得）
+        oshi_names = {}
+        for c in contents:
+            if hasattr(c, 'oshi_id') and c.oshi_id:
+                oshi = db.execute(select(Oshi).where(Oshi.id == c.oshi_id)).scalar_one_or_none()
+                if oshi:
+                    oshi_names[c.id] = oshi.name
+
         items = [{
             "id": c.id,
             "title": c.title,
@@ -154,6 +171,7 @@ def list_user_contents(
             "lang": c.lang,
             "thumbnail_url": c.thumbnail_url,
             "duration_min": c.duration_min,
+            "oshi_name": oshi_names.get(c.id),
         } for c in contents]
 
         print(f"DEBUG: 方法2成功 - 返却件数: {len(items)}")
