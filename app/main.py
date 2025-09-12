@@ -13,7 +13,18 @@ import app.routers.planner as planner_router
 
 
 
-app = FastAPI(title="OshiSpoNavi API", version="0.2.0")
+app = FastAPI(
+    title="OshiSpoNavi API",
+    version="0.2.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+#    docs_url=None,
+#    redoc_url=None,
+#    openapi_url=None,
+#を消せばSwagger UIが復活
 
 ALLOWED_ORIGINS = [
     "https://app-002-gen10-step3-2-node-oshima7.azurewebsites.net",  # フロント本番
